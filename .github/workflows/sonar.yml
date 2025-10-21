@@ -1,0 +1,93 @@
+name: Análise Contínua de Código (Sonar)
+
+on:
+  push:
+    # Roda em todos os pushes para a branch principal (main)
+    branches:
+      - main
+  pull_request:
+    # Roda em todos os Pull Requests abertos contra a branch principal (main)
+    branches:
+      - main
+
+# Define as permissões necessárias para a integração com o Sonar
+permissions:
+  pull-requests: read # Necessário para Pull Request Decoration (Comentários no PR)
+  contents: read # Necessário para o checkout
+  issues: write # Necessário para criar/atualizar issues no GitHub (Decoração de PR)
+
+jobs:
+  build_and_scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+        with:
+          # ESSENCIAL: Configuração para baixar o histórico e garantir análise precisa do "New Code"
+          fetch-depth: 0
+
+      # Configura a JDK 17 (se for projeto Java)
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build e Scan com Sonar
+        # O comando do Maven está correto. Ele executa o build (verify) e o scan do Sonar.
+        run: mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+        env:
+          # URL do seu servidor Sonar. ATENÇÃO: Se estiver usando SonarQube local,
+          # substitua a URL de 'http://localhost:9000/' pela URL acessível ao servidor
+          # onde o GitHub Actions está rodando, ou use o SonarCloud se for na nuvem.
+          SONAR_HOST_URL: http://localhost:9000/ # Mantenha a sua URL de SonarQube/SonarCloud
+
+          # Token de autenticação (usando o segredo do GitHub)
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+          # ---------------------------------------------------------------------
+          # PROPRIEDADES IMPORTANTES PARA GARANTIR O FOCO NO NOVO CÓDIGO E O FAIL
+          # ---------------------------------------------------------------------
+
+          # (OPCIONAL, mas recomendado) Define a branch principal para o Sonar
+          # Isso ajuda o Sonar a determinar o ponto de partida do "New Code" em branches e PRs.
+          # Adicione esta propriedade se o seu repositório usa 'main' como branch principal
+          # sonar.branch.target: 'main'
+
+          # PROPRIEDADE PARA PRs: Garante que a análise seja tratada como um Pull Request
+          # O Sonar usa este ID para postar comentários e verificar o Quality Gate no PR.
+          # Essencial para que o Quality Gate "on New Code" funcione corretamente em PRs.
+          # É uma propriedade do Sonar, mas usamos uma variável de ambiente para configurá-la
+          # na chamada do scanner, mas no maven plugin isso é feito de forma diferente:
+          # Adicionamos a propriedade diretamente no comando ou usamos SONAR_HOST_URL e SONAR_TOKEN
+          # O Scanner do Sonar geralmente detecta o PR automaticamente se estiver no GitHub Actions.
+
+          # Se usar Maven/Gradle, a detecção automática geralmente já funciona,
+          # mas se precisar forçar:
+          # sonar.pullrequest.key: ${{ github.event.pull_request.number }}
+          # sonar.pullrequest.branch: ${{ github.head_ref }}
+          # sonar.pullrequest.base: ${{ github.base_ref }}
+
+          # NOTA: Com a integração nativa do SonarCloud/SonarQube e GitHub Actions,
+          # as propriedades de Pull Request geralmente são injetadas automaticamente.
+          # A chave é o `fetch-depth: 0` e a presença do `SONAR_TOKEN`.
+
+      # -------------------------------------------------------------------------
+      # NOVO PASSO ESSENCIAL: VERIFICAÇÃO DO QUALITY GATE
+      # -------------------------------------------------------------------------
+      # Este passo consulta o SonarQube/SonarCloud e **força a falha do pipeline**
+      # se o Quality Gate (QG) tiver status 'Failed'.
+      - name: Verificar Status do Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.0.0
+        # Este passo só deve rodar se o passo anterior (o scan) foi bem sucedido
+        if: success()
+        with:
+          # Token do Sonar (usa o mesmo)
+          sonarToken: ${{ secrets.SONAR_TOKEN }}
+          # Host URL (usa o mesmo)
+          sonarUrl: ${{ env.SONAR_HOST_URL }}
+          # Tempo máximo (em segundos) que a Action deve esperar pelo resultado do QG
+          # (5 minutos de espera)
+          timeout: 300
